@@ -19,6 +19,7 @@
 | `device/xiaomi/thor/recovery/root/init.recovery.usb.rc` | **BSD-3-Clause (Linux Foundation)** | 源自 AOSP / Linux Foundation 的 USB init 脚本 |
 | `device/xiaomi/thor/security/miui_releasekey.x509.pem` | 权利人：小米 | **公钥证书**，不含私钥；随 MIUI OTA 公开分发 |
 | `device/xiaomi/thor/prebuilt/**` | 权利人：小米 / 高通 | **不随本仓库分发**（见下） |
+| `device/xiaomi/thor/recovery/root/vendor/**` | 权利人：小米 / 高通 | 仅保留 recovery 启动所需的小体积 HAL/守护进程（`qseecomd`、`keymaster@4.1`、`gatekeeper@1.0`、若干 `lib*.so`），以便设备树可直接构建；不提供任何授权 |
 | `themes/font.xml` 引用的字体（Roboto、Google Sans、wqy-microhei） | Apache-2.0 / OFL-1.1 | 由 TWRP / OrangeFox 主题层提供 |
 
 ## 二、明确不包含的内容

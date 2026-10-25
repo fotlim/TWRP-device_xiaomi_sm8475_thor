@@ -136,7 +136,17 @@ if (ret > 1 || (ret > 0 && wallpaper_is_active())) PageManager::Render();
 **先重画一次壁纸**（`wallpaper_render()`）再画半透明底板 —— 否则锁屏 overlay 会透出底下的
 页面内容（因为 `PageSet::Render()` 是先渲染当前页、再渲染 overlays）。
 
-### 2.6 关于页构建人信息
+### 2.6 MTP 内部存储路径修复
+
+`partition.cpp` 的 `TWPartition::Setup_Data_Media()`（`@@ -1308`）：在 `/data` 挂载后主动
+`Make_Dir(Mount_Point + "/media/0")` 并设 0770 权限。
+
+原因：`/data` 刚格式化（或解密失败）时 `/data/media/0` 不存在，`Setup_Data_Media()`
+会把 `Storage_Path` 回落成 `/data/media`，再 bind mount 到 `/sdcard`。此时电脑通过 MTP
+上传的文件落在 `/data/media`，而界面上「内部存储」看的是 `/data/media/0` —— **传到一半发现
+文件不显示**。补上 `/media/0` 后两边路径一致。
+
+### 2.7 关于页构建人信息
 
 `gui/theme/portrait_hdpi/pages/settings.xml` 的 `<page name="about">` 卡片内新增三行：
 GitHub / 邮箱 / QQ。新增布局变量 `cardtxt_9/10/11`（`resources/vars.xml`），

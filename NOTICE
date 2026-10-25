@@ -1,0 +1,95 @@
+TWRP / OrangeFox device tree — Xiaomi 12S Ultra (thor / SM8475)
+Copyright (c) 2026 fotlim and contributors
+
+本产品包含来自多个上游项目的软件。下文说明各组件的来源与许可证，
+完整逐文件授权见 docs/LICENSING.md。
+
+-------------------------------------------------------------------------------
+1. Team Win Recovery Project (TWRP)
+-------------------------------------------------------------------------------
+Recovery 主体、GUI 框架（pixelflinger / minuitwrp）、分区管理、
+`bootable/recovery` 下的绝大部分代码。
+经 minimal-manifest-twrp (`android-12.1.0_r4`) 引入。
+
+Copyright (C) 2007-2026 Team Win LLC and contributors
+Licensed under the Apache License, Version 2.0.
+
+感谢 Team Win、Dees_Troy、bigbiff 及 TWRP 社区。
+
+-------------------------------------------------------------------------------
+2. OrangeFox Recovery
+-------------------------------------------------------------------------------
+主题层（`gui/theme/`）、`orangefox.mk`、`FFiles`、`customzip` 机制、
+`OF_*` / `FOX_*` 构建开关。
+
+Copyright (C) OrangeFox Recovery Project and contributors
+Licensed under the terms of its upstream distribution.
+
+-------------------------------------------------------------------------------
+3. Android Open Source Project (AOSP)
+-------------------------------------------------------------------------------
+`system/vold`、`system/keymaster`、`system/security/keystore2`、
+`system/libvintf`、`external/avb`、`build/make` 等。
+
+Copyright (C) The Android Open Source Project
+Licensed under the Apache License, Version 2.0.
+
+-------------------------------------------------------------------------------
+4. The Linux Foundation / Qualcomm — gpt-utils, UFS BSG
+-------------------------------------------------------------------------------
+`device/xiaomi/thor/gpt-utils/`、`recovery-ufs-bsg.cpp`、
+`recovery/root/init.recovery.usb.rc`
+
+Copyright (c) 2013, The Linux Foundation. All rights reserved.
+Licensed under the BSD 3-Clause License.
+
+-------------------------------------------------------------------------------
+5. LineageOS
+-------------------------------------------------------------------------------
+`bootctrl.xiaomi_sm8475.recovery`、`sm8450-common` 的设备树骨架、
+`recovery.fstab` 参考实现。
+
+Copyright (C) The LineageOS Project
+Licensed under the Apache License, Version 2.0.
+
+-------------------------------------------------------------------------------
+6. 设备树起点
+-------------------------------------------------------------------------------
+本设备树以 dopaemon/TWRP-device_xiaomi_sm8475 为起点
+（branch android-14，HEAD 73dbad51fe5940a524679ba190267ee89d1aca85），
+该仓库实为 OrangeFox R12.1 的 mayfly（Xiaomi 12S）树。
+感谢 dopaemon 的公开工作。
+
+-------------------------------------------------------------------------------
+7. 厂商专有组件（不随本仓库分发）
+-------------------------------------------------------------------------------
+以下内容归属小米 / 高通等权利人，本仓库不包含、不再分发：
+
+  - 预编译内核 prebuilt/thor/kernel（Linux 5.10.177-android12-9）
+  - prebuilt/thor/vendor/ 下的内核模块与 HAL 二进制
+  - 触摸控制器固件（.ftb / .csv）
+  - security/miui_releasekey.x509.pem（仅为公开公钥证书，不含私钥）
+
+使用者需自行从自有设备或官方固件中提取。
+
+-------------------------------------------------------------------------------
+8. 字体与其他资源
+-------------------------------------------------------------------------------
+Roboto、Google Sans（Apache-2.0）、WenQuanYi Micro Hei（GPL-2.0 / OFL 双授权）
+由 TWRP / OrangeFox 主题层提供。
+
+-------------------------------------------------------------------------------
+9. 本项目原创部分
+-------------------------------------------------------------------------------
+`gui/wallpaper.cpp`、`gui/wallpaper.hpp`、`docs/*.md`、`README.md`
+以及设备树中的适配修改。
+
+Copyright (c) 2026 fotlim
+Licensed under the MIT License.
+
+-------------------------------------------------------------------------------
+
+Attribution does not imply endorsement —— 上述项目与个人未审阅、未测试、
+未背书本项目。本项目的问题与缺陷仅与本仓库维护者有关。
+
+本软件按「现状」提供，不附带任何明示或暗示的担保。

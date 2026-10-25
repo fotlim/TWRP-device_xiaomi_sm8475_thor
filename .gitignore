@@ -1,0 +1,28 @@
+# build outputs
+out/
+*.zip
+*.md5
+*.sha256
+obj/
+.gradle/
+local.properties
+ccache/
+
+# tooling
+*.pyc
+__pycache__/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Recovery images are published as GitHub Release assets, not in git
+*.img
+
+# Proprietary blobs are NOT distributed (see docs/LICENSING.md).
+# Obtain them from your own device / official firmware before building.
+device/xiaomi/thor/prebuilt/thor/vendor/
+device/xiaomi/thor/prebuilt/thor/kernel

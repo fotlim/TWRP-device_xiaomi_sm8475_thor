@@ -1,0 +1,17 @@
+# Normalize line endings to LF in the repository (AOSP/Git convention)
+* text=auto eol=lf
+
+# Binary assets must never be converted
+*.png binary
+*.jpg binary
+*.webp binary
+*.ftb binary
+*.pem binary
+device/xiaomi/thor/recovery/root/system/bin/busybox binary
+device/xiaomi/thor/recovery/root/vendor/bin/qseecomd binary
+device/xiaomi/thor/recovery/root/vendor/bin/hw/* binary
+device/xiaomi/thor/recovery/root/vendor/lib64/* binary
+device/xiaomi/thor/recovery/root/system/lib64/* binary
+*.so binary
+*.ko binary
+*.patch text eol=lf

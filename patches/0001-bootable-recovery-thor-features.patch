@@ -1,0 +1,920 @@
+diff --git a/data.cpp b/data.cpp
+index 25b883e7..3d965045 100755
+--- a/data.cpp
++++ b/data.cpp
+@@ -733,6 +733,9 @@ void DataManager::SetDefaultValues()
+ 
+   mConst.SetValue(TW_VERSION_VAR, FOX_BUILD);
+   mConst.SetValue(OF_MAINTAINER_STR, OF_MAINTAINER);
++  mConst.SetValue(OF_MAINTAINER_URL_STR, OF_MAINTAINER_URL);
++  mConst.SetValue(OF_MAINTAINER_EMAIL_STR, OF_MAINTAINER_EMAIL);
++  mConst.SetValue(OF_MAINTAINER_QQ_STR, OF_MAINTAINER_QQ);
+   mConst.SetValue(BUILD_TYPE_STR, FOX_BUILD_TYPE);
+   mConst.SetValue("fox_branch", FOX_BRANCH);
+ 
+diff --git a/gui/Android.bp b/gui/Android.bp
+index 2e54e5a7..46685d7f 100644
+--- a/gui/Android.bp
++++ b/gui/Android.bp
+@@ -83,7 +83,8 @@ cc_library_static {
+         "twmsg.cpp",
+         // OrangeFox
+         "gesture.cpp",
+-        "battery.cpp"
++        "battery.cpp",
++        "wallpaper.cpp"
+     ],
+     shared_libs: [
+         "libminuitwrp",
+diff --git a/gui/gui.cpp b/gui/gui.cpp
+index e03fe91f..7123f8d9 100644
+--- a/gui/gui.cpp
++++ b/gui/gui.cpp
+@@ -53,6 +53,7 @@ extern "C"
+ #include "../openrecoveryscript.hpp"
+ #include "../orscmd/orscmd.h"
+ #include "blanktimer.hpp"
++#include "wallpaper.hpp"
+ #include "tw_atomic.hpp"
+ 
+ // Enable to print render time of each frame to the log file
+@@ -792,13 +793,17 @@ static int runPages(const char *page_name, const int stop_on_page_done)
+ 			input_timeout_ms = idle_frames > 15 ? 1000 : 0;
+ 
+ #ifndef PRINT_RENDER_TIME
+-			if (ret > 1)
++			// A translucent plate cannot cover stale pixels left behind by a
++			// widget that only repainted itself, so with a wallpaper up every
++			// change needs a full page repaint - otherwise dragging a list leaves
++			// ghost trails of the old rows.
++			if (ret > 1 || (ret > 0 && wallpaper_is_active()))
+ 				PageManager::Render();
+ 
+ 			if (ret > 0)
+ 				flip();
+ #else
+-			if (ret > 1)
++			if (ret > 1 || (ret > 0 && wallpaper_is_active()))
+ 			{
+ 				timespec start, end;
+ 				int32_t render_t, flip_t;
+diff --git a/gui/pages.cpp b/gui/pages.cpp
+index b1825757..a1e987b5 100755
+--- a/gui/pages.cpp
++++ b/gui/pages.cpp
+@@ -56,6 +56,7 @@ extern "C" {
+ #include "rapidxml.hpp"
+ #include "objects.hpp"
+ #include "blanktimer.hpp"
++#include "wallpaper.hpp"
+ 
+ // version 2 requires theme to handle power button as action togglebacklight
+ #define TW_THEME_VERSION 3
+@@ -556,9 +557,28 @@ bool Page::ProcessNode(xml_node<>* page, std::vector<xml_node<>*> *templates, in
+ 
+ int Page::Render(void)
+ {
+-	// Render background
+-	gr_color(mBackground.red, mBackground.green, mBackground.blue, mBackground.alpha);
+-	gr_fill(0, 0, gr_fb_width(), gr_fb_height());
++	// Render background. The wallpaper is painted once by PageManager::Render()
++	// underneath everything, so this plate has to stay partly transparent while a
++	// wallpaper is set - otherwise it would paint over the photo. mBackground is a
++	// snapshot taken when the page was built, so clamp the alpha here rather than
++	// trusting the value captured at construction time.
++	//
++	// The lock cover is handled below: it repaints the wallpaper first so that it
++	// can stay translucent without letting the previous page bleed through.
++	{
++		unsigned char alpha = mBackground.alpha;
++		if (wallpaper_is_active()) {
++			// The lock cover is drawn above the page it hides, so repaint the
++			// wallpaper here as well - the photo becomes the cover's backdrop and
++			// whatever was on screen before cannot show through the glass plate.
++			if (mName == "lock")
++				wallpaper_render();
++			if (alpha > WP_PAGE_BG_ALPHA)
++				alpha = WP_PAGE_BG_ALPHA;
++		}
++		gr_color(mBackground.red, mBackground.green, mBackground.blue, alpha);
++		gr_fill(0, 0, gr_fb_width(), gr_fb_height());
++	}
+ 
+ 	// Render remaining objects
+ 	std::vector<RenderObject*>::iterator iter;
+@@ -850,6 +870,11 @@ int PageSet::Load(LoadingContext& ctx, const std::string& filename)
+ 		}
+ 	}
+ 
++	// All colour variables of this file (and of everything it included) are final
++	// now. Restyle the big surfaces if the user has a wallpaper configured, so the
++	// photo shows through while text keeps a readable plate underneath.
++	wallpaper_apply_translucency();
++
+ 	return 0;
+ }
+ 
+@@ -1142,6 +1167,7 @@ int PageSet::LoadVariables(xml_node<>* vars)
+ 
+ 		child = child->next_sibling("variable");
+ 	}
++
+ 	return 0;
+ }
+ 
+@@ -1675,6 +1701,10 @@ int PageManager::Render(void)
+ 	if (blankTimer.isScreenOff())
+ 		return 0;
+ 
++	// User wallpaper: painted once, underneath every page and overlay, so it is
++	// visible globally instead of only in the gaps between themed surfaces.
++	wallpaper_render();
++
+ 	int res = (mCurrentSet ? mCurrentSet->Render() : -1);
+ 	if (mMouseCursor)
+ 		mMouseCursor->Render();
+diff --git a/gui/theme/common/languages/en.xml b/gui/theme/common/languages/en.xml
+index 7c64c5a8..92b63190 100644
+--- a/gui/theme/common/languages/en.xml
++++ b/gui/theme/common/languages/en.xml
+@@ -972,6 +972,9 @@
+ 		
+ 		<!-- About -->
+ 		<string name="abt_maintainer">Maintainer</string>
++        <string name="abt_gh">GitHub</string>
++        <string name="abt_email">Email</string>
++        <string name="abt_qq">QQ</string>
+ 		<string name="abt_fd">Theme creator &amp; designer</string>
+ 		<string name="abt_bork">CEO, Site &amp; UI</string>
+ 		<string name="abt_dj">Build system, legend maintainer</string>
+@@ -1266,5 +1269,16 @@
+ 		<string name="listbox_group_dynamic_part">Dynamic partitions</string>
+ 		<string name="listbox_group_additions">Additions</string>
+ 		<string name="partitions_management">Partitions Management</string>
++		<string name="wallpaper_hdr">Wallpaper</string>
++		<string name="wallpaper_cptn">Background image shown behind every page</string>
++		<string name="wallpaper_exp_warn">Experimental: enabling a wallpaper may cause unstable rendering</string>
++		<string name="wallpaper_off">Disabled</string>
++		<string name="wallpaper_orig">Original</string>
++		<string name="wallpaper_dim">Original, dimmed</string>
++		<string name="wallpaper_grad">Original, gradient</string>
++		<string name="wallpaper_blur">Blurred</string>
++		<string name="wallpaper_pick">Tap to choose an image (PNG)</string>
++		<string name="wallpaper_pick_hdr">Choose image</string>
++		<string name="wallpaper_clear">Clear the wallpaper</string>
+ 	</resources>
+ </language>
+diff --git a/gui/theme/extra-languages/languages/zh_CN.xml b/gui/theme/extra-languages/languages/zh_CN.xml
+index 16d10669..2ce944b6 100644
+--- a/gui/theme/extra-languages/languages/zh_CN.xml
++++ b/gui/theme/extra-languages/languages/zh_CN.xml
+@@ -941,6 +941,9 @@
+         <string name="fox_ota_lite">OTA &amp; ROM</string>
+         <!-- About -->
+         <string name="abt_maintainer">维护人员</string>
++        <string name="abt_gh">GitHub</string>
++        <string name="abt_email">邮箱</string>
++        <string name="abt_qq">QQ</string>
+         <string name="abt_fd">主题创建者 &amp; 设计师</string>
+         <string name="abt_bork">CEO，网站 &amp; 界面</string>
+         <string name="abt_dj">构建系统，维护者简介</string>
+@@ -1196,5 +1199,16 @@
+ 		<string name="listbox_group_dynamic_part">动态分区</string>
+ 		<string name="listbox_group_additions">附加菜单</string>
+ 		<string name="partitions_management">分区管理</string>
++		<string name="wallpaper_hdr">壁纸</string>
++		<string name="wallpaper_cptn">显示在每个页面背后的背景图片</string>
++		<string name="wallpaper_exp_warn">实验性功能：启用壁纸可能导致渲染不稳定</string>
++		<string name="wallpaper_off">关闭</string>
++		<string name="wallpaper_orig">原图</string>
++		<string name="wallpaper_dim">原图压暗</string>
++		<string name="wallpaper_grad">原图渐变</string>
++		<string name="wallpaper_blur">模糊</string>
++		<string name="wallpaper_pick">点此选择图片（PNG）</string>
++		<string name="wallpaper_pick_hdr">选择图片</string>
++		<string name="wallpaper_clear">清除壁纸</string>
+     </resources>
+ </language>
+diff --git a/gui/theme/portrait_hdpi/images/Default/About/maintainer.png b/gui/theme/portrait_hdpi/images/Default/About/maintainer.png
+index 2acbd420..770a775f 100644
+Binary files a/gui/theme/portrait_hdpi/images/Default/About/maintainer.png and b/gui/theme/portrait_hdpi/images/Default/About/maintainer.png differ
+diff --git a/gui/theme/portrait_hdpi/images/SVG/About/card.svg b/gui/theme/portrait_hdpi/images/SVG/About/card.svg
+index 3055dfc3..fb2e342d 100644
+--- a/gui/theme/portrait_hdpi/images/SVG/About/card.svg
++++ b/gui/theme/portrait_hdpi/images/SVG/About/card.svg
+@@ -1,4 +1,4 @@
+ <?xml version="1.0" encoding="utf-8"?>
+-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 336">
+-	<path display="inline" fill="#000000" fill-opacity="1" stroke-width="23.7514" stroke-linecap="round" d="M 71.845703,48 C 58.635534,48 48,58.635534 48,71.845703 V 264.1543 C 48,277.36447 58.635534,288 71.845703,288 H 1008.1543 C 1021.3645,288 1032,277.36447 1032,264.1543 V 71.845703 C 1032,58.635534 1021.3645,48 1008.1543,48 Z M 168,72 a 96,96 0 0 1 96,96 96,96 0 0 1 -96,96 96,96 0 0 1 -96,-96 96,96 0 0 1 96,-96 z" />
++<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 384">
++	<path display="inline" fill="#000000" fill-opacity="1" stroke-width="23.7514" stroke-linecap="round" d="M 71.845703,48 C 58.635534,48 48,58.635534 48,71.845703 V 312.1543 C 48,325.36447 58.635534,336 71.845703,336 H 1008.1543 C 1021.3645,336 1032,325.36447 1032,312.1543 V 71.845703 C 1032,58.635534 1021.3645,48 1008.1543,48 Z M 168,72 a 96,96 0 0 1 96,96 96,96 0 0 1 -96,96 96,96 0 0 1 -96,-96 96,96 0 0 1 96,-96 z" />
+ </svg>
+diff --git a/gui/theme/portrait_hdpi/pages/settings.xml b/gui/theme/portrait_hdpi/pages/settings.xml
+index db827849..95b103ef 100644
+--- a/gui/theme/portrait_hdpi/pages/settings.xml
++++ b/gui/theme/portrait_hdpi/pages/settings.xml
+@@ -50,6 +50,10 @@
+ 					<icon res="bs_btn_set_screen"/>
+ 					<action function="page">ext_screen</action>
+ 				</listitem>
++				<listitem name="{@wallpaper_hdr}">
++					<icon res="bs_btn_set_custom"/>
++					<action function="page">ext_wallpaper</action>
++				</listitem>
+ 				<listitem name="{@vibration_hdr}">
+ 					<icon res="bs_btn_set_vibro"/>
+ 					<condition var1="tw_disable_haptics" op="!=" var2="1"/>
+@@ -1154,6 +1158,32 @@
+ 				<placement x="%card_txt_x%" y="%cardtxt_7%"/>
+ 				<text>{@abt_maintainer}</text>
+ 			</text>
++			<text style="about_info">
++				<condition var1="of_maintainer" op="!=" var2="3"/>
++				<condition var1="of_maintainer" op="!=" var2="2"/>
++				<condition var1="of_maintainer" op="!=" var2="1"/>
++				<font resource="font_xs" color="%text_status%"/>
++				<placement x="%card_txt_x%" y="%cardtxt_9%"/>
++				<text>{@abt_gh}: %of_maintainer_url%</text>
++			</text>
++
++			<text style="about_info">
++				<condition var1="of_maintainer" op="!=" var2="3"/>
++				<condition var1="of_maintainer" op="!=" var2="2"/>
++				<condition var1="of_maintainer" op="!=" var2="1"/>
++				<font resource="font_xs" color="%text_status%"/>
++				<placement x="%card_txt_x%" y="%cardtxt_10%"/>
++				<text>{@abt_email}: %of_maintainer_email%</text>
++			</text>
++
++			<text style="about_info">
++				<condition var1="of_maintainer" op="!=" var2="3"/>
++				<condition var1="of_maintainer" op="!=" var2="2"/>
++				<condition var1="of_maintainer" op="!=" var2="1"/>
++				<font resource="font_xs" color="%text_status%"/>
++				<placement x="%card_txt_x%" y="%cardtxt_11%"/>
++				<text>{@abt_qq}: %of_maintainer_qq%</text>
++			</text>
+ 			<!-- Card -->
+ 			
+ 			<!-- Credits button when maintainer is OrangeFox developer -->
+@@ -1187,7 +1217,7 @@
+ 				<condition var1="of_maintainer" op="!=" var2="3"/>
+ 				<condition var1="of_maintainer" op="!=" var2="2"/>
+ 				<condition var1="of_maintainer" op="!=" var2="1"/>
+-				<placement x="752" y="%card4_btn_y%"/>
++				<placement x="752" y="1770+%cutout_w%"/>
+ 				<text>{@more}</text>
+ 				<action function="set">credits_page=0</action>
+ 				<action function="page">about_credits</action>
+@@ -1428,5 +1458,114 @@
+ 				<action function="page">ext_backup</action>
+ 			</action>
+ 		</page>
++
++		<!-- Wallpaper -->
++		<page name="ext_wallpaper">
++			<template name="base"/>
++
++			<text style="text_ab_title">
++				<placement x="%col1_x_indent%" y="%ab_bc_y%"/>
++				<text>{@wallpaper_hdr}</text>
++			</text>
++
++			<text style="caption">
++				<placement x="%gl_text_x%" y="%row1_1_y%"/>
++				<text>{@wallpaper_cptn}</text>
++			</text>
++
++			<listbox style="radiobox_group">
++				<placement x="0" y="%row1_2_y%" w="%screen_w%" h="%lb_group_l5%"/>
++				<data name="wallpaper_mode"/>
++				<listitem name="{@wallpaper_off}">0</listitem>
++				<listitem name="{@wallpaper_orig}">1</listitem>
++				<listitem name="{@wallpaper_dim}">2</listitem>
++				<listitem name="{@wallpaper_grad}">3</listitem>
++				<listitem name="{@wallpaper_blur}">4</listitem>
++			</listbox>
++
++			<text>
++				<font resource="font_xs" color="#C5221F"/>
++				<placement x="%gl_text_x%" y="904+%cutout_w%"/>
++				<text>{@wallpaper_exp_warn}</text>
++			</text>
++
++			<text style="caption">
++				<placement x="%gl_text_x%" y="%row5_1_y%"/>
++				<text>{@wallpaper_pick}</text>
++			</text>
++
++			<button style="menu_btn">
++				<placement x="%gl_text_x%" y="%row5_1_y%" w="%input_w%" h="%mb_h_hide%"/>
++				<action function="page">wallpaper_pick</action>
++			</button>
++
++			<text style="text_body1">
++				<placement x="%gl_text_x%" y="%row5_2_y%"/>
++				<text>%wallpaper_path%</text>
++			</text>
++
++			<text style="text_body1">
++				<placement x="%gl_text_x%" y="%row6_1_y%"/>
++				<text>{@wallpaper_clear}</text>
++			</text>
++
++			<button style="menu_btn">
++				<placement x="%gl_text_x%" y="%row6_1_y%" w="%input_w%" h="%mb_h_hide%"/>
++				<action function="set">wallpaper_path=none</action>
++			</button>
++
++			<template name="gestures"/>
++
++			<action>
++				<touch key="home"/>
++				<action function="page">main</action>
++			</action>
++
++			<action>
++				<touch key="back"/>
++				<action function="page">settings</action>
++			</action>
++		</page>
++
++		<page name="wallpaper_pick">
++			<fileselector style="fileselector_b">
++				<placement x="0" y="%ab_h%" w="%screen_w%" h="%bl_fullscreen_h%"/>
++				<sort name="0"/>
++				<icon folder="folder_icon" file="file_icon" />
++				<filter folders="0" files="1" nav="0"/>
++				<path name="wallpaper_browse_path" default="/sdcard"/>
++				<data name="wallpaper_path"/>
++				<selection name="wallpaper_pick_sel"/>
++			</fileselector>
++
++			<template name="base"/>
++
++			<text style="text_ab_title">
++				<placement x="%col1_x_indent%" y="%ab_bc_y%"/>
++				<text>{@wallpaper_pick_hdr}</text>
++			</text>
++
++			<button style="actionbar">
++				<placement x="%ab_btn1_x%" y="%ab_y%" placement="4"/>
++				<action function="page">ext_wallpaper</action>
++			</button>
++
++			<image>
++				<placement x="%ab_btn1_x%" y="%ab_y%" placement="4"/>
++				<image resource="actionbar_cancel"/>
++			</image>
++
++			<template name="gestures"/>
++
++			<action>
++				<touch key="home"/>
++				<action function="page">main</action>
++			</action>
++
++			<action>
++				<touch key="back"/>
++				<action function="page">ext_wallpaper</action>
++			</action>
++		</page>
+ 	</pages>
+ </recovery>
+diff --git a/gui/theme/portrait_hdpi/resources/vars.xml b/gui/theme/portrait_hdpi/resources/vars.xml
+index 7dcffc29..2b528039 100644
+--- a/gui/theme/portrait_hdpi/resources/vars.xml
++++ b/gui/theme/portrait_hdpi/resources/vars.xml
+@@ -306,14 +306,17 @@
+ 		<variable name="cardtxt_4" value="1066+%cutout_w%"/>
+ 		<variable name="cardtxt_5" value="1294+%cutout_w%"/>
+ 		<variable name="cardtxt_6" value="1354+%cutout_w%"/>
+-		<variable name="cardtxt_7" value="1582+%cutout_w%"/>
++		<variable name="cardtxt_7" value="1564+%cutout_w%"/>
+ 		<variable name="cardtxt_8" value="1642+%cutout_w%"/>
++		<variable name="cardtxt_9" value="1604+%cutout_w%"/>
++		<variable name="cardtxt_10" value="1648+%cutout_w%"/>
++		<variable name="cardtxt_11" value="1692+%cutout_w%"/>
+ 		
+ 		<variable name="card1_y" value="576+%cutout_w%"/>
+ 		<variable name="card2_y" value="864+%cutout_w%"/>
+ 		<variable name="card3_y" value="1152+%cutout_w%"/>
+ 		<variable name="card4_y" value="1440+%cutout_w%"/>
+-		<variable name="card4_btn_y" value="1604+%cutout_w%"/>
++		<variable name="card4_btn_y" value="1750+%cutout_w%"/>
+ 		
+ 		<variable name="card1_mtag_x" value="744"/>
+ 		<variable name="card1_ctag_x" value="748"/>
+@@ -647,5 +650,11 @@
+ 
+ 		<!-- New top switcher text -->
+ 		<variable name="switch_text_x" value="110"/>
++
++		<!-- Wallpaper -->
++		<variable name="wallpaper_mode" value="0" persist="1"/>
++		<variable name="wallpaper_path" value="none" persist="1"/>
++		<variable name="wallpaper_browse_path" value="/sdcard"/>
++		<variable name="wallpaper_pick_sel" value=""/>
+ 	</variables>
+ </recovery>
+diff --git a/gui/theme/portrait_hdpi/themes/font.xml b/gui/theme/portrait_hdpi/themes/font.xml
+index eb9ca2bf..a512e0ae 100644
+--- a/gui/theme/portrait_hdpi/themes/font.xml
++++ b/gui/theme/portrait_hdpi/themes/font.xml
+@@ -16,6 +16,7 @@
+ 		<font name="font_l" filename="Roboto-Medium.ttf" size="52"/>
+ 		<font name="font_m" filename="Roboto-Medium.ttf" size="42"/>
+ 		<font name="font_s" filename="Roboto-Medium.ttf" size="36"/>
++		<font name="font_xs" filename="Roboto-Regular.ttf" size="32"/>
+ 		<font name="font_b" filename="Roboto-Medium.ttf" size="200"/>
+ 
+ 		<font name="keylabel" filename="Roboto-Regular.ttf" size="64"/>
+diff --git a/gui/wallpaper.cpp b/gui/wallpaper.cpp
+new file mode 100755
+index 00000000..8defa350
+--- /dev/null
++++ b/gui/wallpaper.cpp
+@@ -0,0 +1,379 @@
++/*
++	Custom wallpaper background for OrangeFox Recovery
++
++	Provides a user-selectable full-screen background image that is drawn
++	underneath every page.  Four rendering modes are supported:
++
++	  1 - original  : plain scaled/cropped image
++	  2 - dim       : image darkened by a translucent black layer
++	  3 - gradient  : image with a vertical black gradient on top
++	  4 - blur      : image blurred in software (box blur), then darkened a bit
++
++	The image is decoded once and cached; the cache is dropped whenever the
++	configured path or mode changes.
++*/
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <string>
++#include <algorithm>
++#include <map>
++
++extern "C" {
++#include "../twcommon.h"
++#include "gui.h"
++}
++#include "minuitwrp/minui.h"
++
++#include <pixelflinger/pixelflinger.h>
++
++#include "../data.hpp"
++#include "pages.hpp"
++#include "wallpaper.hpp"
++
++// Rendering modes
++#define WP_MODE_OFF       0
++#define WP_MODE_ORIGINAL  1
++#define WP_MODE_DIM       2
++#define WP_MODE_GRADIENT  3
++#define WP_MODE_BLUR      4
++
++// Tunables
++#define WP_DIM_ALPHA      150   // 0..255, black overlay strength for "dim"
++#define WP_GRAD_TOP_ALPHA 0
++#define WP_GRAD_BOT_ALPHA 215
++#define WP_BLUR_RADIUS    10
++#define WP_BLUR_PASSES    2
++#define WP_MAX_SURFACE_MB 160
++
++static gr_surface gSurface = NULL;
++static std::string gSurfacePath;
++static int gSurfaceMode = -1;
++
++static void free_cached(void)
++{
++	if (gSurface) {
++		res_free_surface(gSurface);
++		gSurface = NULL;
++	}
++	gSurfacePath.clear();
++	gSurfaceMode = -1;
++}
++
++void wallpaper_invalidate(void)
++{
++	free_cached();
++}
++
++// Force every pixel opaque so gr_blit() takes the fast non-blending path and
++// the wallpaper never leaks whatever the framebuffer held before.
++static void force_rgbx(GGLSurface* s)
++{
++	if (!s || !s->data)
++		return;
++	const int w = (int)s->width;
++	const int h = (int)s->height;
++	const int stride = (int)s->stride;   // pixels, not bytes
++	if (w <= 0 || h <= 0)
++		return;
++	for (int y = 0; y < h; ++y) {
++		unsigned char* row = s->data + (size_t)y * stride * 4;
++		for (int x = 0; x < w; ++x)
++			row[x * 4 + 3] = 0xff;
++	}
++	s->format = GGL_PIXEL_FORMAT_RGBX_8888;
++}
++
++// Separable box blur, operates in place on a 4-byte-per-pixel surface.
++static void blur_surface(GGLSurface* s, int radius, int passes)
++{
++	if (!s || !s->data || radius < 1 || passes < 1)
++		return;
++
++	const int w = (int)s->width;
++	const int h = (int)s->height;
++	const size_t stride = (size_t)s->stride * 4;
++	if (w < 2 || h < 2)
++		return;
++
++	unsigned char* tmp = (unsigned char*)malloc(stride * h);
++	if (!tmp) {
++		LOGINFO("wallpaper: no memory for blur buffer, skipping blur\n");
++		return;
++	}
++
++	const int span = radius * 2 + 1;
++
++	for (int pass = 0; pass < passes; ++pass) {
++		// Horizontal
++		for (int y = 0; y < h; ++y) {
++			const unsigned char* src = s->data + (size_t)y * stride;
++			unsigned char* dst = tmp + (size_t)y * stride;
++			for (int c = 0; c < 3; ++c) {
++				int acc = 0;
++				for (int i = -radius; i <= radius; ++i) {
++					int x = std::min(std::max(i, 0), w - 1);
++					acc += src[x * 4 + c];
++				}
++				for (int x = 0; x < w; ++x) {
++					dst[x * 4 + c] = (unsigned char)(acc / span);
++					int xout = std::min(std::max(x - radius, 0), w - 1);
++					int xin  = std::min(std::max(x + radius + 1, 0), w - 1);
++					acc += src[xin * 4 + c] - src[xout * 4 + c];
++				}
++			}
++		}
++
++		// Vertical
++		for (int x = 0; x < w; ++x) {
++			for (int c = 0; c < 3; ++c) {
++				int acc = 0;
++				for (int i = -radius; i <= radius; ++i) {
++					int y = std::min(std::max(i, 0), h - 1);
++					acc += tmp[(size_t)y * stride + x * 4 + c];
++				}
++				for (int y = 0; y < h; ++y) {
++					s->data[(size_t)y * stride + x * 4 + c] = (unsigned char)(acc / span);
++					int yout = std::min(std::max(y - radius, 0), h - 1);
++					int yin  = std::min(std::max(y + radius + 1, 0), h - 1);
++					acc += tmp[(size_t)yin * stride + x * 4 + c]
++					     - tmp[(size_t)yout * stride + x * 4 + c];
++				}
++			}
++		}
++	}
++
++	free(tmp);
++}
++
++// Mix a black veil into the surface rows [y0, y1).  Baking the darkening into
++// the cached surface keeps the per-frame path down to a single blit.
++static void veil_surface(GGLSurface* s, int y0, int y1, int alpha)
++{
++	if (!s || !s->data || alpha <= 0)
++		return;
++	const int w = (int)s->width;
++	const int h = (int)s->height;
++	const int stride = (int)s->stride;
++	if (y0 < 0) y0 = 0;
++	if (y1 > h) y1 = h;
++	if (alpha > 255) alpha = 255;
++	const int keep = 255 - alpha;
++	for (int y = y0; y < y1; ++y) {
++		unsigned char* row = s->data + (size_t)y * stride * 4;
++		for (int x = 0; x < w; ++x) {
++			row[x * 4 + 0] = (unsigned char)((row[x * 4 + 0] * keep) / 255);
++			row[x * 4 + 1] = (unsigned char)((row[x * 4 + 1] * keep) / 255);
++			row[x * 4 + 2] = (unsigned char)((row[x * 4 + 2] * keep) / 255);
++		}
++	}
++}
++
++// Decode + scale + crop the configured image into a screen-sized surface and
++// apply any baked-in effect.  Returns NULL on failure.
++static gr_surface build_surface(const std::string& path, int mode)
++{
++	gr_surface img = NULL;
++
++	if (path.empty()) {
++		LOGINFO("wallpaper: no path configured\n");
++		return NULL;
++	}
++	if (res_create_surface(path.c_str(), &img) != 0 || !img) {
++		LOGERR("wallpaper: cannot decode '%s'\n", path.c_str());
++		return NULL;
++	}
++
++	const int fbw = gr_fb_width();
++	const int fbh = gr_fb_height();
++	if (fbw <= 0 || fbh <= 0) {
++		res_free_surface(img);
++		return NULL;
++	}
++
++	const int iw = (int)gr_get_width(img);
++	const int ih = (int)gr_get_height(img);
++	if (iw <= 0 || ih <= 0) {
++		res_free_surface(img);
++		return NULL;
++	}
++
++	// Scale to cover the whole screen, then centre-crop the overflow.
++	float scale = std::max((float)fbw / iw, (float)fbh / ih);
++	if (scale <= 0.0f)
++		scale = 1.0f;
++
++	const double need_mb =
++		(double)((size_t)(iw * scale) * (size_t)(ih * scale) * 4) / (1024.0 * 1024.0);
++	if (need_mb > WP_MAX_SURFACE_MB) {
++		LOGERR("wallpaper: image too large after scaling (%.0f MB), refusing\n", need_mb);
++		res_free_surface(img);
++		return NULL;
++	}
++
++	gr_surface scaled = NULL;
++	if (res_scale_surface(img, &scaled, scale, scale) != 0 || !scaled) {
++		LOGERR("wallpaper: scaling failed\n");
++		return NULL;
++	}
++	// res_scale_surface() frees the source surface for us.
++	GGLSurface* s = (GGLSurface*)scaled;
++
++	if (mode == WP_MODE_BLUR)
++		blur_surface(s, WP_BLUR_RADIUS, WP_BLUR_PASSES);
++
++	force_rgbx(s);
++
++	// Bake the darkening effect in, so drawing the wallpaper is one blit.
++	if (mode == WP_MODE_DIM) {
++		veil_surface(s, 0, (int)s->height, WP_DIM_ALPHA);
++	} else if (mode == WP_MODE_GRADIENT) {
++		const int strips = 64;
++		const int sh = (int)s->height;
++		const int strip_h = (sh + strips - 1) / strips;
++		for (int i = 0; i < strips; ++i) {
++			int y = i * strip_h;
++			if (y >= sh)
++				break;
++			int h = std::min(strip_h, sh - y);
++			int a = WP_GRAD_TOP_ALPHA +
++			        (WP_GRAD_BOT_ALPHA - WP_GRAD_TOP_ALPHA) * i / (strips - 1);
++			veil_surface(s, y, y + h, a);
++		}
++	} else if (mode == WP_MODE_BLUR) {
++		veil_surface(s, 0, (int)s->height, 90);
++	}
++
++	LOGINFO("wallpaper: built %ux%u surface from '%s' (mode %d)\n",
++	        s->width, s->height, path.c_str(), mode);
++	return scaled;
++}
++
++// ---------------------------------------------------------------------------
++// Wallpaper visibility: translucent theme surfaces
++//
++// TWRP themes paint large opaque rectangles behind the page, the lists and the
++// cards.  A user wallpaper is drawn underneath all of them, so without this the
++// image only peeks out through the gaps between widgets.  While a wallpaper is
++// configured we rewrite those colour variables so the surfaces become tinted
++// glass plates and the photo shows through.
++//
++// Nothing is cached and nothing is "restored" here: a theme reload always
++// re-reads the original values from the XML, so switching the wallpaper off and
++// reloading is enough to get the opaque look back.  That also means this can run
++// as many times as the loader likes without ever double-dimming a colour.
++// ---------------------------------------------------------------------------
++
++static bool wallpaper_is_configured(void)
++{
++	std::string path;
++	DataManager::GetValue("wallpaper_path", path);
++	int mode = DataManager::GetIntValue("wallpaper_mode");
++	if (mode < WP_MODE_ORIGINAL || mode > WP_MODE_BLUR)
++		return false;
++	if (path.empty() || path == "none")
++		return false;
++	return true;
++}
++
++void wallpaper_apply_translucency(void)
++{
++	if (!wallpaper_is_configured())
++		return;
++
++	// name -> alpha of the plate that stays behind the text
++	static const struct { const char *name; unsigned char alpha; } plates[] = {
++		{ "background", 0x66 },   // page background, dialogs
++		{ "power_bg",   0x66 },   // power menu plates
++		{ "cards_bg",   0xB4 },   // cards, lists, nav panel, search bar
++	};
++
++	for (size_t i = 0; i < sizeof(plates) / sizeof(plates[0]); ++i) {
++		std::string val;
++		if (DataManager::GetValue(plates[i].name, val) != 0)
++			continue;
++		// Only plain #RRGGBB colours are rewritten.  Anything else is either not a
++		// colour or already translated - leave it untouched so repeated calls are
++		// harmless.
++		if (val.size() != 7 || val[0] != '#')
++			continue;
++
++		char buf[16];
++		snprintf(buf, sizeof(buf), "%s%02X", val.c_str(), plates[i].alpha);
++		DataManager::SetValue(plates[i].name, buf, 0);
++	}
++
++	LOGINFO("wallpaper: surfaces made translucent for the background image\n");
++}
++
++int wallpaper_is_active(void)
++{
++    return (gSurface != NULL) ? 1 : 0;
++}
++
++int wallpaper_render(void)
++{
++	std::string path;
++	DataManager::GetValue("wallpaper_path", path);
++
++	int mode = DataManager::GetIntValue("wallpaper_mode");
++	if (mode < WP_MODE_OFF || mode > WP_MODE_BLUR)
++		mode = WP_MODE_OFF;
++
++	if (path.empty() || mode == WP_MODE_OFF) {
++		if (gSurface) {
++			LOGINFO("wallpaper: disabled, dropping cached surface\n");
++			free_cached();
++		}
++		return 0;
++	}
++
++	// The theme colours follow the wallpaper, so ask for one reload whenever the
++	// selection changes.  Guarded by a static so it happens once per change and
++	// cannot bounce back and forth with the reload it triggers.
++	{
++		static std::string lastPath;
++		static int lastMode = -1;
++		static bool pending = false;
++		if (path != lastPath || mode != lastMode) {
++			lastPath = path;
++			lastMode = mode;
++			pending = true;
++		}
++		if (pending) {
++			pending = false;
++			wallpaper_apply_translucency();
++			PageManager::RequestReload();
++		}
++	}
++
++	// (Re)build whenever the selection changed.
++	if (!gSurface || path != gSurfacePath || mode != gSurfaceMode) {
++		free_cached();
++		gSurface = build_surface(path, mode);
++		if (!gSurface)
++			return 0;
++		gSurfacePath = path;
++		gSurfaceMode = mode;
++	}
++
++	const int fbw = gr_fb_width();
++	const int fbh = gr_fb_height();
++	const int sw = (int)gr_get_width(gSurface);
++	const int sh = (int)gr_get_height(gSurface);
++
++	// Centre-crop: pick a source rectangle exactly one screen big.
++	int sx = (sw - fbw) / 2;
++	int sy = (sh - fbh) / 2;
++	if (sx < 0) sx = 0;
++	if (sy < 0) sy = 0;
++	int cw = std::min(fbw, sw);
++	int ch = std::min(fbh, sh);
++
++	// Opacity and every effect are baked into the surface, so this is the whole
++	// per-frame cost of the wallpaper.
++	gr_blit(gSurface, sx, sy, cw, ch, 0, 0);
++
++	return 0;
++}
+diff --git a/gui/wallpaper.hpp b/gui/wallpaper.hpp
+new file mode 100755
+index 00000000..4fe43cea
+--- /dev/null
++++ b/gui/wallpaper.hpp
+@@ -0,0 +1,29 @@
++/*
++	Custom wallpaper background for OrangeFox Recovery
++	Adds a user-selectable full-screen background image with
++	original / dimmed / gradient / blurred rendering modes.
++*/
++
++#ifndef _CUSTOM_WALLPAPER_HPP_
++#define _CUSTOM_WALLPAPER_HPP_
++
++// Draw the custom wallpaper over the whole framebuffer.
++// Does nothing when no wallpaper is configured.
++// Called from Page::Render() right after the page background fill.
++int wallpaper_render(void);
++int wallpaper_is_active(void);
++
++// While a wallpaper is set, make the theme's big surface colours translucent
++// so the image is visible behind lists and cards instead of only in the gaps.
++// Re-run after every theme load; it never has to be undone explicitly, because
++// a reload re-reads the original colours from the theme XML.
++void wallpaper_apply_translucency(void);
++
++// Cap for a page background plate so a wallpaper stays visible behind it.
++#define WP_PAGE_BG_ALPHA  0x66
++
++// Drop the cached surface so the next render rebuilds it.
++// Called when the user changes the image or the mode.
++void wallpaper_invalidate(void);
++
++#endif // _CUSTOM_WALLPAPER_HPP_
+diff --git a/orangefox.mk b/orangefox.mk
+index d1e5046f..0102dfd2 100644
+--- a/orangefox.mk
++++ b/orangefox.mk
+@@ -209,6 +209,24 @@ else
+     LOCAL_CFLAGS += -DOF_MAINTAINER='"Testing build (unofficial)"'
+ endif
+ 
++ifneq ($(OF_BUILD_MAINTAINER_URL),)
++    LOCAL_CFLAGS += -DOF_MAINTAINER_URL='"$(OF_BUILD_MAINTAINER_URL)"'
++else
++    LOCAL_CFLAGS += -DOF_MAINTAINER_URL='"https://github.com/fotlim"'
++endif
++
++ifneq ($(OF_BUILD_MAINTAINER_EMAIL),)
++    LOCAL_CFLAGS += -DOF_MAINTAINER_EMAIL='"$(OF_BUILD_MAINTAINER_EMAIL)"'
++else
++    LOCAL_CFLAGS += -DOF_MAINTAINER_EMAIL='"w87911743@126.com"'
++endif
++
++ifneq ($(OF_BUILD_MAINTAINER_QQ),)
++    LOCAL_CFLAGS += -DOF_MAINTAINER_QQ='"$(OF_BUILD_MAINTAINER_QQ)"'
++else
++    LOCAL_CFLAGS += -DOF_MAINTAINER_QQ='"3565486206"'
++endif
++
+ ifneq ($(OF_FLASHLIGHT_ENABLE),)
+     LOCAL_CFLAGS += -DOF_FLASHLIGHT_ENABLE='"$(OF_FLASHLIGHT_ENABLE)"'
+ else
+diff --git a/partition.cpp b/partition.cpp
+index ef691b53..276d1203 100644
+--- a/partition.cpp
++++ b/partition.cpp
+@@ -1308,6 +1308,21 @@ void TWPartition::Setup_Data_Media() {
+ 			Make_Dir("/sdcard", false);
+ 			Symlink_Mount_Point = "/sdcard";
+ 		}
++		// DEVICE FIX (thor): make sure /data/media/0 exists even on a freshly
++		// formatted /data. Without it Storage_Path falls back to /data/media,
++		// which then gets bind-mounted to /sdcard, so files uploaded over MTP
++		// land in a different directory than the one shown as Internal Storage.
++		Mount(false);
++		if (!TWFunc::Path_Exists(Mount_Point + "/media/0")) {
++			Make_Dir(Mount_Point + "/media", false);
++			Make_Dir(Mount_Point + "/media/0", false);
++			TWFunc::set_media_rw_permissions(Mount_Point + "/media");
++			TWFunc::set_media_rw_permissions(Mount_Point + "/media/0");
++			chmod((Mount_Point + "/media").c_str(), 0770);
++			chmod((Mount_Point + "/media/0").c_str(), 0770);
++			LOGINFO("Created '%s/media/0' for emulated storage.\n", Mount_Point.c_str());
++		}
++
+ 		#ifdef OF_FIX_DECRYPTION_ON_DATA_MEDIA
+ 		if (Mount(false) && TWFunc::Path_Exists(Mount_Point + "/media/0")) {
+ 		#else
+diff --git a/variables.h b/variables.h
+index 75f67683..9f826fd8 100644
+--- a/variables.h
++++ b/variables.h
+@@ -30,6 +30,9 @@
+ // OrangeFox - Values
+ #define FOX_DEVICE              FOX_DEVICE_MODEL
+ #define OF_MAINTAINER_STR	"of_maintainer"
++#define OF_MAINTAINER_URL_STR	"of_maintainer_url"
++#define OF_MAINTAINER_EMAIL_STR	"of_maintainer_email"
++#define OF_MAINTAINER_QQ_STR	"of_maintainer_qq"
+ #define OF_FLASHLIGHT_ENABLE_STR "of_flashlight_enable"
+ 
+ // fordownloads values
